@@ -231,9 +231,9 @@
         <!-- 头部 -->
         <div class="header">
             <div class="interval-control">
-                <button id="intervalMinus" title="减少">−</button>
+                <button id="intervalMinus" title="减少刷新间隔">−</button>
                 <span class="interval-display" id="intervalDisplay">5s</span>
-                <button id="intervalPlus" title="增加">+</button>
+                <button id="intervalPlus" title="增加刷新间隔">+</button>
             </div>
             <div class="action-buttons">
                 <button id="syncBtn" title="同步设置">☁️</button>
@@ -261,7 +261,7 @@
         <!-- 股票列表 -->
         <div class="stock-list" id="stockList"></div>
 
-        <!-- 底部 -->
+        <!-- 底部状态栏 -->
         <div class="footer">
             <span id="marketStatus">--</span>
             <span id="lastUpdate">--</span>
@@ -273,13 +273,13 @@
         <div class="modal">
             <h3>设置预警 - <span id="alertStockName"></span></h3>
             <label>价格上限</label>
-            <input type="number" id="alertPriceUp" step="0.01" placeholder="如 40.00">
+            <input type="number" id="alertPriceUp" step="0.01" placeholder="例如 40.00">
             <label>价格下限</label>
-            <input type="number" id="alertPriceDown" step="0.01" placeholder="如 35.00">
+            <input type="number" id="alertPriceDown" step="0.01" placeholder="例如 35.00">
             <label>涨跌幅上限(%)</label>
-            <input type="number" id="alertPercentUp" step="0.01" placeholder="如 5.00">
+            <input type="number" id="alertPercentUp" step="0.01" placeholder="例如 5.00">
             <label>涨跌幅下限(%)</label>
-            <input type="number" id="alertPercentDown" step="0.01" placeholder="如 -5.00">
+            <input type="number" id="alertPercentDown" step="0.01" placeholder="例如 -5.00">
             <div class="modal-actions">
                 <button id="saveAlertBtn">保存</button>
                 <button id="closeAlertModal">取消</button>
@@ -316,6 +316,7 @@
 
     <script>
         (function() {
+            // ========== 配置 ==========
             const API_BASE = 'https://push2.eastmoney.com/api/qt/stock/get';
             const DEFAULT_INTERVAL = 5;
             const MIN_INTERVAL = 2;
@@ -323,12 +324,17 @@
             const STORAGE_PREFIX = 'stock_monitor_';
             const GIST_API = 'https://api.github.com/gists';
 
+            // ========== 内置 Gist 凭据 ==========
+            const DEFAULT_GIST_ID = '894591c1511b85f9a36078202b544f49';
+            const DEFAULT_TOKEN = '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';
+
+            // ========== 状态变量 ==========
             let stockList = [];
             let settings = { interval: DEFAULT_INTERVAL };
             let cache = {};
             let copyTemplate = '请调用公开数据，用这套量化评估体系分析{名称} {代码}，当前价格按{最新价}元算。';
             let intervalId = null;
-            let syncConfig = { gistId: '', token: '' };
+            let syncConfig = { gistId: DEFAULT_GIST_ID, token: DEFAULT_TOKEN };
 
             const $ = id => document.getElementById(id);
 
@@ -393,14 +399,21 @@
                 settings = loadFromStorage('settings', { interval: DEFAULT_INTERVAL });
                 cache = loadFromStorage('cache', {});
                 copyTemplate = loadFromStorage('template', copyTemplate);
-                syncConfig = loadFromStorage('syncConfig', { gistId: '', token: '' });
+
+                // 同步配置：优先使用本地存储，若无则使用内置默认值
+                const storedSync = loadFromStorage('syncConfig', null);
+                if (storedSync && storedSync.gistId && storedSync.token) {
+                    syncConfig = storedSync;
+                } else {
+                    syncConfig = { gistId: DEFAULT_GIST_ID, token: DEFAULT_TOKEN };
+                }
                 recalculateOffsets();
             }
 
             function saveStockList() {
                 recalculateOffsets();
                 saveToStorage('stockList', stockList);
-                syncToGist(); // 自动同步
+                syncToGist();
             }
             function saveCache() {
                 saveToStorage('cache', cache);
@@ -411,7 +424,7 @@
                 if (!syncConfig.gistId || !syncConfig.token) return;
                 try {
                     const content = JSON.stringify(stockList, null, 2);
-                    const res = await fetch(`${GIST_API}/${syncConfig.gistId}`, {
+                    await fetch(`${GIST_API}/${syncConfig.gistId}`, {
                         method: 'PATCH',
                         headers: {
                             'Authorization': `token ${syncConfig.token}`,
@@ -423,9 +436,8 @@
                             }
                         })
                     });
-                    if (!res.ok) console.error('同步失败', res.status);
                 } catch (e) {
-                    console.error('同步出错', e);
+                    console.error('同步至 Gist 失败', e);
                 }
             }
 
@@ -442,7 +454,7 @@
                         return JSON.parse(file.content);
                     }
                 } catch (e) {
-                    console.error('拉取Gist失败', e);
+                    console.error('从 Gist 拉取失败', e);
                 }
                 return null;
             }
@@ -454,41 +466,27 @@
                 }
                 const remoteList = await pullFromGist();
                 if (remoteList && Array.isArray(remoteList)) {
-                    if (remoteList.length === 0) {
-                        // 远程空，直接用本地
-                        await syncToGist();
-                    } else {
-                        const localCodes = stockList.map(s => s.code);
-                        const remoteCodes = remoteList.map(s => s.code);
-                        const localOnly = stockList.filter(s => !remoteCodes.includes(s.code));
-                        const remoteOnly = remoteList.filter(s => !localCodes.includes(s.code));
-                        
-                        if (localOnly.length === 0 && remoteOnly.length === 0) {
-                            // 完全相同，不做改变
-                            return;
+                    if (remoteList.length === 0 && stockList.length === 0) return;
+                    const codeMap = new Map();
+                    stockList.forEach(s => codeMap.set(s.code, s));
+                    remoteList.forEach(s => {
+                        if (!codeMap.has(s.code)) {
+                            codeMap.set(s.code, s);
                         }
-
-                        // 简单合并：保留两边都有的，添加本地的，添加远程的
-                        const mergedMap = new Map();
-                        stockList.forEach(s => mergedMap.set(s.code, s));
-                        remoteList.forEach(s => {
-                            if (!mergedMap.has(s.code)) {
-                                mergedMap.set(s.code, s);
-                            }
-                        });
-                        stockList = Array.from(mergedMap.values());
-                        saveStockList();
+                    });
+                    const newList = Array.from(codeMap.values());
+                    if (newList.length !== stockList.length || !newList.every((s, i) => s.code === stockList[i]?.code)) {
+                        stockList = newList;
+                        saveToStorage('stockList', stockList);
                         renderStockList();
-                        await syncToGist(); // 将合并后的结果推送上去
-                        alert('同步完成：已合并两端的股票列表');
+                        await syncToGist();
                     }
                 } else {
-                    // 远程无数据，推送本地
                     await syncToGist();
                 }
             }
 
-            // ========== 渲染 ==========
+            // ========== 渲染股票列表 ==========
             function renderStockList() {
                 const container = $('stockList');
                 container.innerHTML = '';
@@ -521,8 +519,8 @@
                             <span style="color:#22a85d">L:${low ? low.toFixed(2) : '--'}</span>
                         </div>
                         <div class="actions">
-                            <button class="copy-btn" title="复制指令">📋</button>
-                            <button class="alert-btn" title="预警">🔔</button>
+                            <button class="copy-btn" title="复制分析指令">📋</button>
+                            <button class="alert-btn" title="设置预警">🔔</button>
                             <button class="delete-btn" title="删除">✕</button>
                         </div>`;
                     container.appendChild(item);
@@ -599,7 +597,7 @@
                 Notification.requestPermission();
             }
 
-            // ========== 添加/删除 ==========
+            // ========== 添加/删除股票 ==========
             function addStocks(codesStr) {
                 const raw = codesStr.split(/[,，\n\s]+/).map(c => c.trim()).filter(c => c);
                 if (!raw.length) return;
@@ -630,6 +628,7 @@
                 renderStockList();
             }
 
+            // ========== 复制指令 ==========
             function handleCopy(e) {
                 const code = e.target.closest('.stock-item').dataset.code;
                 const data = cache[code]?.data;
@@ -680,7 +679,6 @@
                     });
                 }, 1000);
             }
-
             function stopTimer() {
                 if (intervalId) { clearInterval(intervalId); intervalId = null; }
             }
@@ -789,7 +787,7 @@
                 updateMarketStatus();
                 bindGlobalEvents();
 
-                // 如果已配置同步，启动时自动拉取合并
+                // 自动同步：如果已配置凭据，立即合并远程数据
                 if (syncConfig.gistId && syncConfig.token) {
                     await doSync();
                 }
