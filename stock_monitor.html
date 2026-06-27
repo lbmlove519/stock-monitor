@@ -311,9 +311,11 @@
 
     <div class="modal-overlay hidden" id="syncModal">
         <div class="modal">
-            <h3>同步设置</h3>
-            <label>Gist ID</label><input type="text" id="gistIdInput">
-            <label>Token</label><input type="password" id="gistTokenInput">
+            <h3>GitHub Gist 同步设置</h3>
+            <label>Gist ID</label>
+            <input type="text" id="gistIdInput" placeholder="自动填入或手动修改">
+            <label>Personal Access Token</label>
+            <input type="password" id="gistTokenInput" placeholder="首次使用需输入 Token">
             <div class="modal-actions">
                 <button id="saveSyncBtn">保存并同步</button>
                 <button id="closeSyncModal">取消</button>
@@ -325,13 +327,14 @@
         (function() {
             const API_BASE = 'https://push2.eastmoney.com/api/qt/stock/get';
             const GIST_API = 'https://api.github.com/gists';
+            // 内置 Gist ID（公开标识符，无安全风险）
             const DEFAULT_GIST_ID = '894591c1511b85f9a36078202b544f49';
-            const DEFAULT_TOKEN = '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';
             const STORAGE_PREFIX = 'stock_monitor_';
 
             let stockList = [], settings = { interval: 5 }, cache = {};
             let copyTemplate = '请调用公开数据，用这套量化评估体系分析{名称} {代码}，当前价格按{最新价}元算。';
-            let intervalId = null, syncConfig = { gistId: DEFAULT_GIST_ID, token: DEFAULT_TOKEN };
+            let intervalId = null;
+            let syncConfig = { gistId: DEFAULT_GIST_ID, token: '' };
 
             const $ = id => document.getElementById(id);
 
@@ -398,15 +401,21 @@
                 settings = loadFromStorage('settings', { interval: 5 });
                 cache = loadFromStorage('cache', {});
                 copyTemplate = loadFromStorage('template', copyTemplate);
+
+                // 加载同步配置：优先使用本地存储，若无则使用内置 Gist ID（Token 留空）
                 const stored = loadFromStorage('syncConfig', null);
-                if (stored?.gistId && stored?.token) syncConfig = stored;
+                if (stored && stored.gistId && stored.token) {
+                    syncConfig = stored;
+                } else {
+                    syncConfig = { gistId: DEFAULT_GIST_ID, token: '' };
+                }
                 recalculateOffsets();
             }
 
             function saveStockList() {
                 recalculateOffsets();
                 saveToStorage('stockList', stockList);
-                syncToGist();
+                if (syncConfig.token) syncToGist(); // 只有配置了 Token 才同步
             }
             function saveCache() { saveToStorage('cache', cache); }
 
@@ -423,19 +432,18 @@
             }
 
             async function pullFromGist() {
-                try {
-                    const res = await fetch(`${GIST_API}/${syncConfig.gistId}`, {
-                        headers: { 'Authorization': `token ${syncConfig.token}` }
-                    });
-                    if (!res.ok) throw new Error('HTTP ' + res.status);
-                    const data = await res.json();
-                    return data.files?.['stocks.json'] ? JSON.parse(data.files['stocks.json'].content) : null;
-                } catch (e) { console.error('拉取Gist失败', e); throw e; }
+                if (!syncConfig.gistId || !syncConfig.token) throw new Error('未配置Token');
+                const res = await fetch(`${GIST_API}/${syncConfig.gistId}`, {
+                    headers: { 'Authorization': `token ${syncConfig.token}` }
+                });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                return data.files?.['stocks.json'] ? JSON.parse(data.files['stocks.json'].content) : null;
             }
 
             async function doSync(silent = false) {
                 if (!syncConfig.gistId || !syncConfig.token) {
-                    if (!silent) showSyncMsg('未配置同步，点击☁️设置', true);
+                    if (!silent) showSyncMsg('未配置 Token，点击☁️输入', true);
                     return;
                 }
                 showSyncMsg('正在同步...');
@@ -461,7 +469,7 @@
                         hideSyncMsg();
                     }
                 } catch (e) {
-                    showSyncMsg('同步失败，请检查网络或点击☁️重试', true);
+                    showSyncMsg('同步失败：' + e.message, true);
                     if (!silent) throw e;
                 }
             }
@@ -520,7 +528,6 @@
                     container.appendChild(item);
                 });
 
-                // 绑定排序、复制、预警、删除事件
                 document.querySelectorAll('.move-up').forEach((btn, i) => {
                     btn.addEventListener('click', () => moveStock(i, 'up'));
                 });
@@ -668,7 +675,7 @@
                 $('closeSyncModal').onclick = () => $('syncModal').classList.add('hidden');
                 $('saveSyncBtn').onclick = async () => {
                     const gid = $('gistIdInput').value.trim(), tok = $('gistTokenInput').value.trim();
-                    if (!gid || !tok) return alert('请填写完整');
+                    if (!gid || !tok) return alert('请填写 Gist ID 和 Token');
                     syncConfig = { gistId: gid, token: tok };
                     saveToStorage('syncConfig', syncConfig);
                     $('syncModal').classList.add('hidden');
@@ -684,14 +691,21 @@
                 setInterval(updateMarketStatus, 30000);
                 updateMarketStatus();
                 bindEvents();
-                if (syncConfig.gistId && syncConfig.token) {
+
+                // 如果已配置 Token，自动同步一次
+                if (syncConfig.token) {
                     try {
                         await doSync(true);
                     } catch {
                         showSyncMsg('同步失败，2秒后重试...', true);
-                        setTimeout(() => doSync(true).catch(() => showSyncMsg('仍无法同步，请点击☁️检查配置', true)), 2000);
+                        setTimeout(() => {
+                            if (syncConfig.token) doSync(true).catch(() => showSyncMsg('仍无法同步，请点击☁️检查配置', true));
+                        }, 2000);
                     }
+                } else {
+                    showSyncMsg('请点击 ☁️ 输入 Token 以启用同步', false);
                 }
+
                 stockList.forEach(s => { if (!cache[s.code]) fetchStock(s.code); });
             }
 
