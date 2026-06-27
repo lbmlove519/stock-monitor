@@ -16,6 +16,8 @@
             --up-bg: #fef0f0;
             --down-bg: #eefaf3;
             --border: #e0e3eb;
+            --sync-ok: #22c55e;
+            --sync-pending: #f59e0b;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -67,7 +69,7 @@
             min-width: 40px;
             text-align: center;
         }
-        .action-buttons { display: flex; gap: 8px; }
+        .action-buttons { display: flex; gap: 8px; align-items: center; }
         .action-buttons button {
             background: var(--card);
             border: none;
@@ -80,6 +82,17 @@
             align-items: center;
             justify-content: center;
         }
+        .sync-status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ccc;
+            margin-left: -12px;
+            margin-right: 12px;
+            transition: background 0.3s;
+        }
+        .sync-status-dot.ok { background: var(--sync-ok); }
+        .sync-status-dot.pending { background: var(--sync-pending); }
 
         .add-panel {
             background: var(--card);
@@ -183,6 +196,8 @@
             justify-content: space-between;
             font-size: 12px;
             color: #999;
+            margin-top: auto;
+            padding-top: 8px;
         }
 
         .modal-overlay {
@@ -236,6 +251,7 @@
                 <button id="intervalPlus" title="增加刷新间隔">+</button>
             </div>
             <div class="action-buttons">
+                <span class="sync-status-dot" id="syncStatusDot" title="同步状态"></span>
                 <button id="syncBtn" title="同步设置">☁️</button>
                 <button id="templateBtn" title="编辑复制模板">📝</button>
                 <button id="hardRefreshAllBtn" title="硬刷新全部">🔄</button>
@@ -323,18 +339,19 @@
             const MAX_INTERVAL = 300;
             const STORAGE_PREFIX = 'stock_monitor_';
             const GIST_API = 'https://api.github.com/gists';
+            const FETCH_TIMEOUT = 8000; // 8秒超时
 
-            // ========== 内置 Gist 凭据 ==========
+            // 内置凭据
             const DEFAULT_GIST_ID = '894591c1511b85f9a36078202b544f49';
             const DEFAULT_TOKEN = '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';
 
-            // ========== 状态变量 ==========
             let stockList = [];
             let settings = { interval: DEFAULT_INTERVAL };
             let cache = {};
             let copyTemplate = '请调用公开数据，用这套量化评估体系分析{名称} {代码}，当前价格按{最新价}元算。';
             let intervalId = null;
             let syncConfig = { gistId: DEFAULT_GIST_ID, token: DEFAULT_TOKEN };
+            let isSyncing = false;
 
             const $ = id => document.getElementById(id);
 
@@ -383,6 +400,28 @@
                 stockList.forEach((s, i) => { s.offset = Math.round(i * step); });
             }
 
+            function setSyncStatus(status) {
+                const dot = $('syncStatusDot');
+                dot.classList.remove('ok', 'pending');
+                if (status === 'ok') dot.classList.add('ok');
+                else if (status === 'pending') dot.classList.add('pending');
+                dot.title = status === 'ok' ? '已同步' : status === 'pending' ? '同步中...' : '未配置同步';
+            }
+
+            // ========== 网络请求封装（带超时） ==========
+            async function fetchWithTimeout(url, options = {}, timeout = FETCH_TIMEOUT) {
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), timeout);
+                try {
+                    const resp = await fetch(url, { ...options, signal: controller.signal });
+                    clearTimeout(timer);
+                    return resp;
+                } catch (e) {
+                    clearTimeout(timer);
+                    throw e;
+                }
+            }
+
             // ========== 本地存储 ==========
             function loadFromStorage(key, fallback) {
                 try {
@@ -391,7 +430,9 @@
                 } catch (e) { return fallback; }
             }
             function saveToStorage(key, value) {
-                localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(value));
+                try {
+                    localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(value));
+                } catch (e) {}
             }
 
             function loadAll() {
@@ -400,7 +441,6 @@
                 cache = loadFromStorage('cache', {});
                 copyTemplate = loadFromStorage('template', copyTemplate);
 
-                // 同步配置：优先使用本地存储，若无则使用内置默认值
                 const storedSync = loadFromStorage('syncConfig', null);
                 if (storedSync && storedSync.gistId && storedSync.token) {
                     syncConfig = storedSync;
@@ -422,34 +462,35 @@
             // ========== GitHub Gist 同步 ==========
             async function syncToGist() {
                 if (!syncConfig.gistId || !syncConfig.token) return;
+                setSyncStatus('pending');
                 try {
                     const content = JSON.stringify(stockList, null, 2);
-                    await fetch(`${GIST_API}/${syncConfig.gistId}`, {
+                    await fetchWithTimeout(`${GIST_API}/${syncConfig.gistId}`, {
                         method: 'PATCH',
                         headers: {
                             'Authorization': `token ${syncConfig.token}`,
                             'Content-Type': 'application/json'
                         },
                         body: JSON.stringify({
-                            files: {
-                                'stocks.json': { content }
-                            }
+                            files: { 'stocks.json': { content } }
                         })
                     });
+                    setSyncStatus('ok');
                 } catch (e) {
                     console.error('同步至 Gist 失败', e);
+                    setSyncStatus('pending');
                 }
             }
 
             async function pullFromGist() {
                 if (!syncConfig.gistId || !syncConfig.token) return null;
                 try {
-                    const res = await fetch(`${GIST_API}/${syncConfig.gistId}`, {
+                    const res = await fetchWithTimeout(`${GIST_API}/${syncConfig.gistId}`, {
                         headers: { 'Authorization': `token ${syncConfig.token}` }
                     });
                     if (!res.ok) throw new Error('获取失败');
                     const data = await res.json();
-                    const file = data.files['stocks.json'];
+                    const file = data.files && data.files['stocks.json'];
                     if (file && file.content) {
                         return JSON.parse(file.content);
                     }
@@ -459,36 +500,59 @@
                 return null;
             }
 
-            async function doSync() {
+            async function doSync(silent = false) {
+                if (isSyncing) return;
                 if (!syncConfig.gistId || !syncConfig.token) {
-                    alert('请先设置同步信息（点击☁️按钮）');
+                    if (!silent) alert('请先设置同步信息（点击☁️按钮）');
                     return;
                 }
-                const remoteList = await pullFromGist();
-                if (remoteList && Array.isArray(remoteList)) {
-                    if (remoteList.length === 0 && stockList.length === 0) return;
-                    const codeMap = new Map();
-                    stockList.forEach(s => codeMap.set(s.code, s));
-                    remoteList.forEach(s => {
-                        if (!codeMap.has(s.code)) {
-                            codeMap.set(s.code, s);
+                isSyncing = true;
+                setSyncStatus('pending');
+                try {
+                    const remoteList = await pullFromGist();
+                    if (remoteList && Array.isArray(remoteList)) {
+                        const codeMap = new Map();
+                        stockList.forEach(s => codeMap.set(s.code, s));
+                        let merged = false;
+                        remoteList.forEach(s => {
+                            if (!codeMap.has(s.code)) {
+                                codeMap.set(s.code, s);
+                                merged = true;
+                            }
+                        });
+                        if (merged) {
+                            stockList = Array.from(codeMap.values());
+                            saveToStorage('stockList', stockList);
+                            renderStockList();
+                            await syncToGist(); // 上传合并结果
+                        } else {
+                            // 本地与远程一致，仅上传一次确保一致
+                            if (stockList.length > 0 && remoteList.length === 0) {
+                                await syncToGist();
+                            } else {
+                                setSyncStatus('ok');
+                            }
                         }
-                    });
-                    const newList = Array.from(codeMap.values());
-                    if (newList.length !== stockList.length || !newList.every((s, i) => s.code === stockList[i]?.code)) {
-                        stockList = newList;
-                        saveToStorage('stockList', stockList);
-                        renderStockList();
-                        await syncToGist();
+                    } else {
+                        // 远程无数据，上传本地列表
+                        if (stockList.length > 0) {
+                            await syncToGist();
+                        } else {
+                            setSyncStatus('ok');
+                        }
                     }
-                } else {
-                    await syncToGist();
+                } catch (e) {
+                    console.error('同步异常', e);
+                    setSyncStatus('pending');
+                } finally {
+                    isSyncing = false;
                 }
             }
 
             // ========== 渲染股票列表 ==========
             function renderStockList() {
                 const container = $('stockList');
+                if (!container) return;
                 container.innerHTML = '';
                 stockList.forEach(stock => {
                     const data = cache[stock.code]?.data;
@@ -542,7 +606,7 @@
                 const secid = `${market}.${code}`;
                 const url = `${API_BASE}?secid=${secid}&fields=f43,f44,f45,f46,f47,f48,f50,f51,f52,f57,f58,f60,f116,f162,f169,f170,f171,f172&_=${Date.now()}`;
                 try {
-                    const resp = await fetch(url);
+                    const resp = await fetchWithTimeout(url);
                     const json = await resp.json();
                     if (json?.data) {
                         cache[code] = { data: json.data, timestamp: Date.now() };
@@ -721,7 +785,6 @@
                     }
                 });
 
-                // 同步按钮
                 $('syncBtn').addEventListener('click', () => {
                     $('gistIdInput').value = syncConfig.gistId;
                     $('gistTokenInput').value = syncConfig.token;
@@ -761,7 +824,6 @@
                     $('templateModal').classList.add('hidden');
                 });
 
-                // 同步弹窗
                 $('closeSyncModal').addEventListener('click', () => $('syncModal').classList.add('hidden'));
                 $('saveSyncBtn').addEventListener('click', async () => {
                     const gistId = $('gistIdInput').value.trim();
@@ -787,15 +849,19 @@
                 updateMarketStatus();
                 bindGlobalEvents();
 
-                // 自动同步：如果已配置凭据，立即合并远程数据
+                // 自动同步（静默，不弹窗）
                 if (syncConfig.gistId && syncConfig.token) {
-                    await doSync();
+                    doSync(true).then(() => {
+                        // 预加载所有股票数据
+                        stockList.forEach(s => {
+                            if (!cache[s.code]) fetchStock(s.code, false);
+                        });
+                    });
+                } else {
+                    stockList.forEach(s => {
+                        if (!cache[s.code]) fetchStock(s.code, false);
+                    });
                 }
-
-                // 预加载所有股票数据
-                stockList.forEach(s => {
-                    if (!cache[s.code]) fetchStock(s.code, false);
-                });
             }
 
             init();
