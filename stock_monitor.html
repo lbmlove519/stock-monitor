@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>多股票实时监控</title>
+    <title>GP-Tracker</title>
     <style>
         :root {
             --bg: #f5f7fb;
@@ -27,12 +27,8 @@
             flex-direction: column;
             align-items: center;
         }
-        .app-container {
-            width: 100%;
-            max-width: 600px;
-        }
+        .app-container { width: 100%; max-width: 600px; }
 
-        /* 头部 */
         .header {
             display: flex;
             justify-content: space-between;
@@ -71,10 +67,7 @@
             min-width: 40px;
             text-align: center;
         }
-        .action-buttons {
-            display: flex;
-            gap: 8px;
-        }
+        .action-buttons { display: flex; gap: 8px; }
         .action-buttons button {
             background: var(--card);
             border: none;
@@ -88,7 +81,6 @@
             justify-content: center;
         }
 
-        /* 添加面板 */
         .add-panel {
             background: var(--card);
             border-radius: 16px;
@@ -122,7 +114,6 @@
         }
         .hidden { display: none !important; }
 
-        /* 股票列表 */
         .stock-list {
             display: flex;
             flex-direction: column;
@@ -140,10 +131,7 @@
             transition: background 0.15s;
         }
         .stock-item:hover { background: #fafbfe; }
-        .name-code {
-            flex: 1.5;
-            min-width: 0;
-        }
+        .name-code { flex: 1.5; min-width: 0; }
         .name {
             font-weight: 700;
             font-size: 16px;
@@ -151,20 +139,9 @@
             overflow: hidden;
             text-overflow: ellipsis;
         }
-        .code {
-            font-size: 11px;
-            color: var(--sub);
-            margin-top: 2px;
-        }
-        .price-area {
-            flex: 1.5;
-            text-align: right;
-        }
-        .price {
-            font-size: 18px;
-            font-weight: 800;
-            font-variant-numeric: tabular-nums;
-        }
+        .code { font-size: 11px; color: var(--sub); margin-top: 2px; }
+        .price-area { flex: 1.5; text-align: right; }
+        .price { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }
         .change {
             font-size: 12px;
             font-weight: 600;
@@ -173,11 +150,7 @@
             margin-left: 4px;
             white-space: nowrap;
         }
-        .change .percent {
-            font-size: 10px;
-            opacity: 0.85;
-            margin-left: 2px;
-        }
+        .change .percent { font-size: 10px; opacity: 0.85; margin-left: 2px; }
         .hl {
             display: flex;
             gap: 8px;
@@ -186,10 +159,7 @@
             white-space: nowrap;
             flex: 1;
         }
-        .actions {
-            display: flex;
-            gap: 4px;
-        }
+        .actions { display: flex; gap: 4px; }
         .actions button {
             background: none;
             border: none;
@@ -201,7 +171,6 @@
         }
         .actions button:active { color: #333; }
 
-        /* 价格颜色 */
         .price-up { color: var(--up); }
         .price-down { color: var(--down); }
         .price-neutral { color: var(--text); }
@@ -209,7 +178,6 @@
         .change-down { background: var(--down-bg); color: var(--down); }
         .change-neutral { color: var(--neutral); background: #f3f4f7; }
 
-        /* 底部状态 */
         .footer {
             display: flex;
             justify-content: space-between;
@@ -217,7 +185,6 @@
             color: #999;
         }
 
-        /* 弹窗 */
         .modal-overlay {
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
@@ -232,7 +199,7 @@
             border-radius: 16px;
             padding: 20px;
             width: 90%;
-            max-width: 340px;
+            max-width: 360px;
         }
         .modal h3 { margin-bottom: 14px; font-size: 16px; }
         .modal input, .modal textarea {
@@ -269,6 +236,7 @@
                 <button id="intervalPlus" title="增加">+</button>
             </div>
             <div class="action-buttons">
+                <button id="syncBtn" title="同步设置">☁️</button>
                 <button id="templateBtn" title="编辑复制模板">📝</button>
                 <button id="hardRefreshAllBtn" title="硬刷新全部">🔄</button>
                 <button id="addStockBtn" title="添加股票">＋</button>
@@ -331,23 +299,37 @@
         </div>
     </div>
 
+    <!-- 同步设置弹窗 -->
+    <div class="modal-overlay hidden" id="syncModal">
+        <div class="modal">
+            <h3>GitHub Gist 同步设置</h3>
+            <label>Gist ID</label>
+            <input type="text" id="gistIdInput" placeholder="例如 a1b2c3d4e5f6...">
+            <label>Personal Access Token</label>
+            <input type="password" id="gistTokenInput" placeholder="ghp_xxxxxxxxxxxx">
+            <div class="modal-actions">
+                <button id="saveSyncBtn">保存并同步</button>
+                <button id="closeSyncModal">取消</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         (function() {
-            // 配置
             const API_BASE = 'https://push2.eastmoney.com/api/qt/stock/get';
             const DEFAULT_INTERVAL = 5;
             const MIN_INTERVAL = 2;
             const MAX_INTERVAL = 300;
             const STORAGE_PREFIX = 'stock_monitor_';
+            const GIST_API = 'https://api.github.com/gists';
 
-            // 状态
-            let stockList = [];          // { code, market, name, offset }
+            let stockList = [];
             let settings = { interval: DEFAULT_INTERVAL };
-            let cache = {};             // { code: { data, timestamp } }
+            let cache = {};
             let copyTemplate = '请调用公开数据，用这套量化评估体系分析{名称} {代码}，当前价格按{最新价}元算。';
             let intervalId = null;
+            let syncConfig = { gistId: '', token: '' };
 
-            // DOM 引用
             const $ = id => document.getElementById(id);
 
             // ========== 工具函数 ==========
@@ -364,7 +346,7 @@
                     if (code.startsWith('6')) return '1';
                     if (code.startsWith('0') || code.startsWith('3')) return '0';
                 }
-                return '116'; // 港股
+                return '116';
             }
 
             function getPriceDivisor(market) {
@@ -395,7 +377,7 @@
                 stockList.forEach((s, i) => { s.offset = Math.round(i * step); });
             }
 
-            // ========== 存储操作 ==========
+            // ========== 本地存储 ==========
             function loadFromStorage(key, fallback) {
                 try {
                     const raw = localStorage.getItem(STORAGE_PREFIX + key);
@@ -411,15 +393,99 @@
                 settings = loadFromStorage('settings', { interval: DEFAULT_INTERVAL });
                 cache = loadFromStorage('cache', {});
                 copyTemplate = loadFromStorage('template', copyTemplate);
+                syncConfig = loadFromStorage('syncConfig', { gistId: '', token: '' });
                 recalculateOffsets();
             }
 
             function saveStockList() {
                 recalculateOffsets();
                 saveToStorage('stockList', stockList);
+                syncToGist(); // 自动同步
             }
             function saveCache() {
                 saveToStorage('cache', cache);
+            }
+
+            // ========== GitHub Gist 同步 ==========
+            async function syncToGist() {
+                if (!syncConfig.gistId || !syncConfig.token) return;
+                try {
+                    const content = JSON.stringify(stockList, null, 2);
+                    const res = await fetch(`${GIST_API}/${syncConfig.gistId}`, {
+                        method: 'PATCH',
+                        headers: {
+                            'Authorization': `token ${syncConfig.token}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            files: {
+                                'stocks.json': { content }
+                            }
+                        })
+                    });
+                    if (!res.ok) console.error('同步失败', res.status);
+                } catch (e) {
+                    console.error('同步出错', e);
+                }
+            }
+
+            async function pullFromGist() {
+                if (!syncConfig.gistId || !syncConfig.token) return null;
+                try {
+                    const res = await fetch(`${GIST_API}/${syncConfig.gistId}`, {
+                        headers: { 'Authorization': `token ${syncConfig.token}` }
+                    });
+                    if (!res.ok) throw new Error('获取失败');
+                    const data = await res.json();
+                    const file = data.files['stocks.json'];
+                    if (file && file.content) {
+                        return JSON.parse(file.content);
+                    }
+                } catch (e) {
+                    console.error('拉取Gist失败', e);
+                }
+                return null;
+            }
+
+            async function doSync() {
+                if (!syncConfig.gistId || !syncConfig.token) {
+                    alert('请先设置同步信息（点击☁️按钮）');
+                    return;
+                }
+                const remoteList = await pullFromGist();
+                if (remoteList && Array.isArray(remoteList)) {
+                    if (remoteList.length === 0) {
+                        // 远程空，直接用本地
+                        await syncToGist();
+                    } else {
+                        const localCodes = stockList.map(s => s.code);
+                        const remoteCodes = remoteList.map(s => s.code);
+                        const localOnly = stockList.filter(s => !remoteCodes.includes(s.code));
+                        const remoteOnly = remoteList.filter(s => !localCodes.includes(s.code));
+                        
+                        if (localOnly.length === 0 && remoteOnly.length === 0) {
+                            // 完全相同，不做改变
+                            return;
+                        }
+
+                        // 简单合并：保留两边都有的，添加本地的，添加远程的
+                        const mergedMap = new Map();
+                        stockList.forEach(s => mergedMap.set(s.code, s));
+                        remoteList.forEach(s => {
+                            if (!mergedMap.has(s.code)) {
+                                mergedMap.set(s.code, s);
+                            }
+                        });
+                        stockList = Array.from(mergedMap.values());
+                        saveStockList();
+                        renderStockList();
+                        await syncToGist(); // 将合并后的结果推送上去
+                        alert('同步完成：已合并两端的股票列表');
+                    }
+                } else {
+                    // 远程无数据，推送本地
+                    await syncToGist();
+                }
             }
 
             // ========== 渲染 ==========
@@ -465,15 +531,9 @@
             }
 
             function attachEvents() {
-                document.querySelectorAll('.copy-btn').forEach(b => {
-                    b.addEventListener('click', handleCopy);
-                });
-                document.querySelectorAll('.alert-btn').forEach(b => {
-                    b.addEventListener('click', handleOpenAlert);
-                });
-                document.querySelectorAll('.delete-btn').forEach(b => {
-                    b.addEventListener('click', handleDelete);
-                });
+                document.querySelectorAll('.copy-btn').forEach(b => b.addEventListener('click', handleCopy));
+                document.querySelectorAll('.alert-btn').forEach(b => b.addEventListener('click', handleOpenAlert));
+                document.querySelectorAll('.delete-btn').forEach(b => b.addEventListener('click', handleDelete));
             }
 
             // ========== 数据抓取 ==========
@@ -527,7 +587,6 @@
                     (alert.priceDown && price <= alert.priceDown) ||
                     (alert.percentUp && change >= alert.percentUp) ||
                     (alert.percentDown && change <= alert.percentDown)) {
-                    // 浏览器通知
                     if (Notification.permission === 'granted') {
                         new Notification(`${data.f58 || code} 预警`, {
                             body: `价格 ${price.toFixed(2)}，涨跌幅 ${change.toFixed(2)}%`
@@ -536,7 +595,6 @@
                 }
             }
 
-            // 请求通知权限
             if ('Notification' in window && Notification.permission === 'default') {
                 Notification.requestPermission();
             }
@@ -555,7 +613,7 @@
                     if (!stockList.find(s => s.code === code)) {
                         stockList.push({ code, market, name: code, offset: 0 });
                         changed = true;
-                        fetchStock(code, false); // 异步抓取
+                        fetchStock(code, false);
                     }
                 });
                 if (changed) {
@@ -572,7 +630,6 @@
                 renderStockList();
             }
 
-            // ========== 复制指令 ==========
             function handleCopy(e) {
                 const code = e.target.closest('.stock-item').dataset.code;
                 const data = cache[code]?.data;
@@ -645,7 +702,7 @@
                 else if (!isTradingHours() && intervalId) stopTimer();
             }
 
-            // ========== 初始化事件 ==========
+            // ========== 事件绑定 ==========
             function bindGlobalEvents() {
                 $('intervalMinus').addEventListener('click', () => {
                     if (settings.interval > MIN_INTERVAL) {
@@ -665,6 +722,14 @@
                         startTimer();
                     }
                 });
+
+                // 同步按钮
+                $('syncBtn').addEventListener('click', () => {
+                    $('gistIdInput').value = syncConfig.gistId;
+                    $('gistTokenInput').value = syncConfig.token;
+                    $('syncModal').classList.remove('hidden');
+                });
+
                 $('templateBtn').addEventListener('click', () => {
                     $('templateInput').value = copyTemplate;
                     $('templateModal').classList.remove('hidden');
@@ -697,10 +762,25 @@
                     saveToStorage('template', copyTemplate);
                     $('templateModal').classList.add('hidden');
                 });
+
+                // 同步弹窗
+                $('closeSyncModal').addEventListener('click', () => $('syncModal').classList.add('hidden'));
+                $('saveSyncBtn').addEventListener('click', async () => {
+                    const gistId = $('gistIdInput').value.trim();
+                    const token = $('gistTokenInput').value.trim();
+                    if (!gistId || !token) {
+                        alert('请填写 Gist ID 和 Token');
+                        return;
+                    }
+                    syncConfig = { gistId, token };
+                    saveToStorage('syncConfig', syncConfig);
+                    $('syncModal').classList.add('hidden');
+                    await doSync();
+                });
             }
 
             // ========== 启动 ==========
-            function init() {
+            async function init() {
                 loadAll();
                 $('intervalDisplay').textContent = `${settings.interval}s`;
                 renderStockList();
@@ -708,7 +788,13 @@
                 setInterval(updateMarketStatus, 30000);
                 updateMarketStatus();
                 bindGlobalEvents();
-                // 预加载所有已缓存股票
+
+                // 如果已配置同步，启动时自动拉取合并
+                if (syncConfig.gistId && syncConfig.token) {
+                    await doSync();
+                }
+
+                // 预加载所有股票数据
                 stockList.forEach(s => {
                     if (!cache[s.code]) fetchStock(s.code, false);
                 });
